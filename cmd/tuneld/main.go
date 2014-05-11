@@ -62,10 +62,8 @@ func init() {
 	}
 	serverTlsConfig.ClientCAs = certPool
 
-	serverTlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-
-	//TODO remove this for real security
-	serverTlsConfig.InsecureSkipVerify = true
+	//TODO uncomment this for real security
+	//serverTlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
 }
 
 func init() {
