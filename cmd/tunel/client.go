@@ -10,7 +10,12 @@ import (
 	"net/rpc"
 )
 
-var tlsConfig = new(tls.Config)
+var (
+	rootCert   = flag.String("rootcert", "rootcert.pem", "PEM file with trusted certificates to be used by this client to verify server certificates")
+	clientKeys = flag.String("clientkeys", "server.pem", "PEM file with certificate chain to be used by this client")
+
+	tlsConfig = new(tls.Config)
+)
 
 func main() {
 	flag.Parse()
@@ -36,14 +41,14 @@ func main() {
 }
 
 func init() {
-	cert, err := tls.LoadX509KeyPair("server.pem", "server.pem")
+	cert, err := tls.LoadX509KeyPair(*clientKeys, *clientKeys)
 	if err != nil {
 		log.Panicln(err)
 	}
 
 	tlsConfig.Certificates = append(tlsConfig.Certificates, cert)
 
-	rootCertBytes, err := ioutil.ReadFile("rootcert.pem")
+	rootCertBytes, err := ioutil.ReadFile(*rootCert)
 	if err != nil {
 		log.Panicln(err)
 	}

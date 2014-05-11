@@ -23,7 +23,7 @@ func runSrcWorker(worker *srcWorker) {
 
 	listener, err := net.Listen("tcp", worker.Src)
 	if err != nil {
-		log.Println("Failed to setup listener at %v: %v\n", worker.Src, err)
+		log.Printf("Failed to setup listener at %v: %v\n", worker.Src, err)
 		return
 	}
 	worker.Listener = listener
@@ -31,7 +31,7 @@ func runSrcWorker(worker *srcWorker) {
 	// start connection with DstServer
 	_, err = getOrCreateServerConn(worker.DstServer)
 	if err != nil {
-		log.Println("Failed to connect to destination server %v: %v\n", worker.DstServer, err)
+		log.Printf("Failed to connect to destination server %v: %v\n", worker.DstServer, err)
 		return
 	}
 
@@ -57,7 +57,7 @@ func handleSrcConn(worker *srcWorker, conn net.Conn) {
 	// connect to DstServer
 	rpcClient, err := getOrCreateServerConn(worker.DstServer)
 	if err != nil {
-		log.Println("Failed to connect to destination server %v: %v\n", worker.DstServer, err)
+		log.Printf("Failed to connect to destination server %v: %v\n", worker.DstServer, err)
 		return
 	}
 
