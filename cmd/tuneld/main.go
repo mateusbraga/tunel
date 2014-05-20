@@ -42,6 +42,7 @@ func main() {
 	rpc.Accept(listener)
 }
 
+// serverTlsConfig initialization
 func init() {
 	cert, err := tls.LoadX509KeyPair(*serverKeys, *serverKeys)
 	if err != nil {
@@ -66,6 +67,7 @@ func init() {
 	//serverTlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
 }
 
+// clientTlsConfig initialization
 func init() {
 	cert, err := tls.LoadX509KeyPair(*serverKeys, *serverKeys)
 	if err != nil {

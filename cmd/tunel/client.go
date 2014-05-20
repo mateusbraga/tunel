@@ -28,7 +28,7 @@ func main() {
 
 	tlsConn, err := tls.Dial("tcp", tnnl.SrcServer, tlsConfig)
 	if err != nil {
-		log.Panicln("Failed to dial SrcServer:", err)
+		log.Panicf("Failed to dial SrcServer %v: %v\n", tnnl.SrcServ, err)
 	}
 	rpcClient := rpc.NewClient(tlsConn)
 
