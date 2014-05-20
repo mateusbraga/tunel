@@ -65,6 +65,7 @@ func init() {
 
 	//TODO uncomment this for real security
 	//serverTlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+	serverTlsConfig.InsecureSkipVerify = true
 }
 
 // clientTlsConfig initialization
@@ -87,4 +88,6 @@ func init() {
 		log.Panicln("Failed to init root certificate")
 	}
 	clientTlsConfig.RootCAs = certPool
+
+	clientTlsConfig.InsecureSkipVerify = true
 }

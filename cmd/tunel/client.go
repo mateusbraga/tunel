@@ -59,4 +59,5 @@ func init() {
 		log.Panicln("Failed to init root certificate")
 	}
 	tlsConfig.RootCAs = certPool
+	tlsConfig.InsecureSkipVerify = true
 }
