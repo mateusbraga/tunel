@@ -11,42 +11,64 @@ import (
 )
 
 var (
-	srcWorkersTable   = make(map[tunnel.Tunnel]*srcWorker)
-	srcWorkersTableMu sync.Mutex
+	tunnelEntranceTable   = make(map[tunnel.Tunnel]*tunnelEntrance)
+	tunnelEntranceTableMu sync.Mutex
 
 	srcConnTable   = make(map[ConnId]net.Conn)
 	srcConnTableMu sync.Mutex
 )
 
-func runSrcWorker(worker *srcWorker) {
-	defer stopSrcWorker(worker)
+type tunnelEntrance struct {
+	mutex sync.RWMutex
+	tunnel.Tunnel
+	net.Listener
+	closing bool
+}
 
-	listener, err := net.Listen("tcp", worker.Src)
+// TODO clean up srcWorkersTable
+//defer func() {
+//srcWorkersTableMu.Lock()
+//delete(srcWorkersTable, worker.Tunnel)
+//srcWorkersTableMu.Unlock()
+//}()
+func (t *tunnelEntrance) Accept() {
+	defer t.done()
+
+	listener, err := net.Listen("tcp", t.Src)
 	if err != nil {
-		log.Printf("Failed to setup listener at %v: %v\n", worker.Src, err)
+		log.Printf("Failed to setup listener at %v: %v\n", t.Src, err)
 		return
 	}
-	worker.Listener = listener
+	t.mutex.Lock()
+	t.Listener = listener
+	t.mutex.Unlock()
 
-	// start connection with DstServer
-	_, err = getOrCreateServerConn(worker.DstServer)
+	// start connection with DstServer to speed up first connection by doing ssl handshake now
+	_, err = getOrCreateServerConn(t.DstServer)
 	if err != nil {
-		log.Printf("Failed to connect to destination server %v: %v\n", worker.DstServer, err)
+		log.Printf("Failed to connect to destination server %v: %v\n", t.DstServer, err)
 		return
 	}
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Printf("Listener at %v failed to accept new connection: %v\n", worker.Tunnel.DstServer, err)
+			t.mutex.RLock()
+			if t.closing {
+				t.mutex.RUnlock()
+				return
+			}
+			t.mutex.RUnlock()
+
+			log.Printf("Listener at %v failed to accept new connection: %v\n", t.Tunnel.Src, err)
 			return
 		}
 
-		go handleSrcConn(worker, conn)
+		go t.ServeConn(conn)
 	}
 }
 
-func handleSrcConn(worker *srcWorker, conn net.Conn) {
+func (t *tunnelEntrance) ServeConn(conn net.Conn) {
 	defer func() {
 		err := conn.Close()
 		if err != nil {
@@ -55,35 +77,31 @@ func handleSrcConn(worker *srcWorker, conn net.Conn) {
 	}()
 
 	// connect to DstServer
-	rpcClient, err := getOrCreateServerConn(worker.DstServer)
+	rpcClient, err := getOrCreateServerConn(t.DstServer)
 	if err != nil {
-		log.Printf("Failed to connect to destination server %v: %v\n", worker.DstServer, err)
+		log.Printf("Failed to connect to destination server %v: %v\n", t.DstServer, err)
 		return
 	}
 
 	// open connection with Dst
 	var connId ConnId
-	err = rpcClient.Call("DstServerService.Dial", worker.Tunnel, &connId)
+	err = rpcClient.Call("DstServerService.Dial", t.Tunnel, &connId)
 	if err != nil {
-		log.Printf("Failed to complete connection through tunnel with destination server %v: %v\n", worker.DstServer, err)
+		log.Printf("Failed to complete connection through tunnel with destination server %v: %v\n", t.DstServer, err)
 		return
 	}
 	srcConnTableMu.Lock()
 	srcConnTable[connId] = conn
 	srcConnTableMu.Unlock()
-	// Clean up connection
 	defer func() {
-		srcConnTableMu.Lock()
-		delete(srcConnTable, connId)
-		srcConnTableMu.Unlock()
-
 		err = rpcClient.Call("DstServerService.CloseDstConn", connId, new(struct{}))
 		if err != nil {
 			log.Printf("Error while asking to close Dst connection %v: %v\n", connId, err)
 		}
 	}()
 
-	tnnlConn := tunnelSendConn{ConnId: connId, Client: rpcClient}
+	tnnlConn := NewTunnelConn("DstServerService.Send", connId, rpcClient)
+	defer tnnlConn.Close()
 
 	// keep sending data from conn to DstServer (which will then go to Dst)
 	sent, err := io.Copy(tnnlConn, conn)
@@ -94,11 +112,7 @@ func handleSrcConn(worker *srcWorker, conn net.Conn) {
 	log.Printf("Src-side connection %v ended. %v bytes was sent to Dst in total.", connId, sent)
 }
 
-func stopSrcWorker(worker *srcWorker) {
-	srcWorkersTableMu.Lock()
-	defer srcWorkersTableMu.Unlock()
-
-	delete(srcWorkersTable, worker.Tunnel)
+func (t *tunnelEntrance) done() {
 }
 
 type srcWorker struct {
@@ -111,24 +125,26 @@ type SrcServerService struct{}
 func init() { rpc.Register(new(SrcServerService)) }
 
 func (s *SrcServerService) SetUpSrcTunnel(tnnl tunnel.Tunnel, ack *struct{}) error {
-	log.Println("New tunnel is up:", tnnl)
-	srcWorkersTableMu.Lock()
-	defer srcWorkersTableMu.Unlock()
-
-	_, ok := srcWorkersTable[tnnl]
+	tunnelEntranceTableMu.Lock()
+	defer tunnelEntranceTableMu.Unlock()
+	_, ok := tunnelEntranceTable[tnnl]
 	if ok {
 		return fmt.Errorf("Tunnel already exists.")
 	}
 
-	worker := new(srcWorker)
-	worker.Tunnel = tnnl
-	go runSrcWorker(worker)
-	srcWorkersTable[tnnl] = worker
+	t := &tunnelEntrance{}
+	t.Tunnel = tnnl
+
+	tunnelEntranceTable[tnnl] = t
+
+	go t.Accept()
+
+	log.Println("New tunnel is up:", tnnl)
 	return nil
 }
 
 // Receive is called by DstServer to pass data to SrcServer
-func (s *SrcServerService) Receive(msg SendMsg, sent *int) error {
+func (s *SrcServerService) Receive(msg SendMsg, nop *struct{}) error {
 	srcConnTableMu.Lock()
 	defer srcConnTableMu.Unlock()
 
@@ -137,10 +153,15 @@ func (s *SrcServerService) Receive(msg SendMsg, sent *int) error {
 		return fmt.Errorf("Connection is not up")
 	}
 
-	var err error
-	*sent, err = conn.Write(msg.Data)
-	log.Printf("Sent %v bytes back to %v (%v)\n", *sent, msg.Tunnel.Src, msg.ConnId)
-	return err
+	sent, err := conn.Write(msg.Data)
+	if err != nil {
+		return err
+	}
+	if sent != len(msg.Data) {
+		return fmt.Errorf("Expected to send %d bytes, but sent only %d", len(msg.Data), sent)
+	}
+	log.Printf("Sent %v bytes back to %v (%v)\n", len(msg.Data), msg.Tunnel.Src, msg.ConnId)
+	return nil
 }
 
 func (s *SrcServerService) CloseSrcConn(connId ConnId, nothing *struct{}) error {

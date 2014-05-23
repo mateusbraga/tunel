@@ -31,7 +31,8 @@ func getOrCreateServerConn(addr string) (*rpc.Client, error) {
 
 type SendMsg struct {
 	ConnId
-	Data []byte
+	MsgNumber uint64
+	Data      []byte
 }
 
 type ConnId struct {
@@ -39,26 +40,60 @@ type ConnId struct {
 	ConnNumber int
 }
 
-type tunnelSendConn struct {
+type tunnelConn struct {
+	serviceMethod string
+	mutex         sync.Mutex
 	ConnId
 	*rpc.Client
+	lastSentMsgNumber *uint64
+	resultChan        chan *rpc.Call
+	closeChan         chan struct{}
+	err               error
 }
 
-func (t tunnelSendConn) Write(data []byte) (int, error) {
-	msg := SendMsg{ConnId: t.ConnId, Data: data}
-	var sent int
-	err := t.Client.Call("DstServerService.Send", msg, &sent)
-	return sent, err
+func NewTunnelConn(serviceMethod string, connId ConnId, rpcClient *rpc.Client) tunnelConn {
+	var lastNumber uint64
+	tnnlConn := tunnelConn{serviceMethod: serviceMethod, ConnId: connId, Client: rpcClient, lastSentMsgNumber: &lastNumber, resultChan: make(chan *rpc.Call, 16)}
+
+	go tunnelConnWorker(tnnlConn)
+
+	return tnnlConn
 }
 
-type tunnelReceiveConn struct {
-	ConnId
-	*rpc.Client
+func tunnelConnWorker(tnnlConn tunnelConn) {
+	for {
+		select {
+		case _ = <-tnnlConn.closeChan:
+			return
+		case call := <-tnnlConn.resultChan:
+			if call.Error != nil {
+				tnnlConn.mutex.Lock()
+				tnnlConn.err = call.Error
+				tnnlConn.mutex.Unlock()
+
+				tnnlConn.Close()
+			}
+		}
+	}
 }
 
-func (t tunnelReceiveConn) Write(data []byte) (int, error) {
-	msg := SendMsg{ConnId: t.ConnId, Data: data}
-	var sent int
-	err := t.Client.Call("SrcServerService.Receive", msg, &sent)
-	return sent, err
+func (t tunnelConn) Write(data []byte) (int, error) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+	if t.err != nil {
+		return 0, t.err
+	}
+
+	*t.lastSentMsgNumber++
+	msg := SendMsg{ConnId: t.ConnId, Data: data, MsgNumber: *t.lastSentMsgNumber}
+	t.Client.Go(t.serviceMethod, msg, &struct{}{}, t.resultChan)
+	return len(data), nil
+}
+
+func (t tunnelConn) Close() error {
+	_, closed := <-t.closeChan
+	if !closed {
+		close(t.closeChan)
+	}
+	return nil
 }

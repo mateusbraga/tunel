@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	dstConnTable   = make(map[ConnId]net.Conn)
+	dstConnTable   = make(map[ConnId]*dstConn)
 	dstConnNextId  int
 	dstConnTableMu sync.Mutex
 )
@@ -32,7 +32,8 @@ func runDstWorker(worker dstWorker) {
 		return
 	}
 
-	tnnlConn := tunnelReceiveConn{ConnId: worker.ConnId, Client: rpcClient}
+	tnnlConn := NewTunnelConn("SrcServerService.Receive", worker.ConnId, rpcClient)
+	defer tnnlConn.Close()
 
 	// keep sending data back from Dst to SrcServer (which will then go to Src)
 	sent, err := io.Copy(tnnlConn, worker.Conn)
@@ -66,24 +67,44 @@ func stopDstWorker(worker dstWorker) {
 	}
 }
 
+type dstConn struct {
+	net.Conn
+	lastSeenMsgNumber uint64
+	*sync.Cond
+}
+
 type DstServerService struct{}
 
 func init() { rpc.Register(new(DstServerService)) }
 
 // Send is called by SrcServer to pass data to DstServer
-func (s *DstServerService) Send(msg SendMsg, sent *int) error {
+func (s *DstServerService) Send(msg SendMsg, nop *struct{}) error {
 	dstConnTableMu.Lock()
 	defer dstConnTableMu.Unlock()
 
-	conn, ok := dstConnTable[msg.ConnId]
+	dst, ok := dstConnTable[msg.ConnId]
 	if !ok {
 		return fmt.Errorf("Connection is not up")
 	}
 
-	var err error
-	*sent, err = conn.Write(msg.Data)
+	dst.L.Lock()
+	defer dst.L.Unlock()
+	for msg.MsgNumber != dst.lastSeenMsgNumber+1 {
+		dst.Wait()
+	}
+
+	sent, err := dst.Write(msg.Data)
+	if err != nil {
+		return err
+	}
+	if sent != len(msg.Data) {
+		return fmt.Errorf("Expected to send %d bytes, but sent only %d", len(msg.Data), sent)
+	}
+
+	dst.lastSeenMsgNumber++
+	dst.Broadcast()
 	log.Printf("Sent %v bytes to %v (%v)\n", len(msg.Data), msg.Tunnel.Dst, msg.ConnId)
-	return err
+	return nil
 }
 
 // Dial open connection with Dst and starts a dstWorker.
@@ -101,7 +122,9 @@ func (s *DstServerService) Dial(tnnl tunnel.Tunnel, connId *ConnId) error {
 	connId.ConnNumber = dstConnNextId
 	dstConnNextId++
 
-	dstConnTable[*connId] = conn
+	dst := &dstConn{Conn: conn, lastSeenMsgNumber: 0, Cond: sync.NewCond(new(sync.Mutex))}
+
+	dstConnTable[*connId] = dst
 	go runDstWorker(dstWorker{ConnId: *connId, Conn: conn})
 
 	log.Printf("New connection with Dst %v is up: %v\n", tnnl.Dst, connId.ConnNumber)
