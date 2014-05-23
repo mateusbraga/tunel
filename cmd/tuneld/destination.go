@@ -16,58 +16,54 @@ var (
 	dstConnTableMu sync.Mutex
 )
 
-type dstWorker struct {
-	ConnId
-	net.Conn
-}
-
-// runDstWorker starts once every DstServerService.Dial and forwards data received from Dst
+// serveDstConn starts once every DstServerService.Dial and forwards data received from Dst
 // to SrcServer.
-func runDstWorker(worker dstWorker) {
-	defer stopDstWorker(worker)
+func serveDstConn(dst *dstConn) {
+	defer stopDstWorker(dst)
 
-	rpcClient, err := getOrCreateServerConn(worker.SrcServer)
+	rpcClient, err := getOrCreateServerConn(dst.SrcServer)
 	if err != nil {
-		log.Println("Failed to connect to source server %v: %v\n", worker.SrcServer, err)
+		log.Println("Failed to connect to source server %v: %v\n", dst.SrcServer, err)
 		return
 	}
 
-	tnnlConn := NewTunnelConn("SrcServerService.Receive", worker.ConnId, rpcClient)
+	tnnlConn := NewTunnelConn("SrcServerService.Receive", dst.ConnId, rpcClient)
 	defer tnnlConn.Close()
 
 	// keep sending data back from Dst to SrcServer (which will then go to Src)
-	sent, err := io.Copy(tnnlConn, worker.Conn)
+	sent, err := io.Copy(tnnlConn, dst.Conn)
 	if err != nil {
-		log.Printf("Dst-side connection %v broke down: %v\n", worker.ConnId, err)
+		log.Printf("Dst-side connection %v broke down: %v\n", dst.ConnId, err)
 		return
 	}
 
-	log.Printf("Dst-side connection %v ended. %v bytes was sent to Src in total.", worker.ConnId, sent)
+	log.Printf("Dst-side connection %v ended. %v bytes was sent to Src in total.", dst.ConnId, sent)
 }
 
-func stopDstWorker(worker dstWorker) {
+func stopDstWorker(dst *dstConn) {
 	dstConnTableMu.Lock()
 	defer dstConnTableMu.Unlock()
 
-	delete(dstConnTable, worker.ConnId)
+	delete(dstConnTable, dst.ConnId)
 
-	err := worker.Conn.Close()
+	err := dst.Conn.Close()
 	if err != nil {
-		log.Printf("Error while closing Dst connection %v: %v\n", worker.ConnId, err)
+		log.Printf("Error while closing Dst connection %v: %v\n", dst.ConnId, err)
 	}
 
-	rpcClient, err := getOrCreateServerConn(worker.SrcServer)
+	rpcClient, err := getOrCreateServerConn(dst.SrcServer)
 	if err != nil {
-		log.Printf("Error while asking to close Src connection %v: %v\n", worker.ConnId, err)
+		log.Printf("Error while asking to close Src connection %v: %v\n", dst.ConnId, err)
 		return
 	}
-	err = rpcClient.Call("SrcServerService.CloseSrcConn", worker.ConnId, new(struct{}))
+	err = rpcClient.Call("SrcServerService.CloseSrcConn", dst.ConnId, new(struct{}))
 	if err != nil {
-		log.Printf("Error while asking to close Src connection %v: %v\n", worker.ConnId, err)
+		log.Printf("Error while asking to close Src connection %v: %v\n", dst.ConnId, err)
 	}
 }
 
 type dstConn struct {
+	ConnId
 	net.Conn
 	lastSeenMsgNumber uint64
 	*sync.Cond
@@ -80,12 +76,12 @@ func init() { rpc.Register(new(DstServerService)) }
 // Send is called by SrcServer to pass data to DstServer
 func (s *DstServerService) Send(msg SendMsg, nop *struct{}) error {
 	dstConnTableMu.Lock()
-	defer dstConnTableMu.Unlock()
-
 	dst, ok := dstConnTable[msg.ConnId]
 	if !ok {
+		dstConnTableMu.Unlock()
 		return fmt.Errorf("Connection is not up")
 	}
+	dstConnTableMu.Unlock()
 
 	dst.L.Lock()
 	defer dst.L.Unlock()
@@ -125,7 +121,7 @@ func (s *DstServerService) Dial(tnnl tunnel.Tunnel, connId *ConnId) error {
 	dst := &dstConn{Conn: conn, lastSeenMsgNumber: 0, Cond: sync.NewCond(new(sync.Mutex))}
 
 	dstConnTable[*connId] = dst
-	go runDstWorker(dstWorker{ConnId: *connId, Conn: conn})
+	go serveDstConn(dst)
 
 	log.Printf("New connection with Dst %v is up: %v\n", tnnl.Dst, connId.ConnNumber)
 	return nil
