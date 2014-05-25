@@ -42,18 +42,18 @@ type ConnId struct {
 
 type tunnelConn struct {
 	serviceMethod string
-	mutex         sync.Mutex
 	ConnId
 	*rpc.Client
 	lastSentMsgNumber *uint64
 	resultChan        chan *rpc.Call
 	closeChan         chan struct{}
 	err               error
+	mutex             sync.Mutex
 }
 
 func NewTunnelConn(serviceMethod string, connId ConnId, rpcClient *rpc.Client) tunnelConn {
 	var lastNumber uint64
-	tnnlConn := tunnelConn{serviceMethod: serviceMethod, ConnId: connId, Client: rpcClient, lastSentMsgNumber: &lastNumber, resultChan: make(chan *rpc.Call, 16)}
+	tnnlConn := tunnelConn{serviceMethod: serviceMethod, ConnId: connId, Client: rpcClient, lastSentMsgNumber: &lastNumber, resultChan: make(chan *rpc.Call, 16), closeChan: make(chan struct{})}
 
 	go tunnelConnWorker(tnnlConn)
 
@@ -91,8 +91,10 @@ func (t tunnelConn) Write(data []byte) (int, error) {
 }
 
 func (t tunnelConn) Close() error {
-	_, closed := <-t.closeChan
-	if !closed {
+	select {
+	case _ = <-t.closeChan:
+		//already closed
+	default:
 		close(t.closeChan)
 	}
 	return nil

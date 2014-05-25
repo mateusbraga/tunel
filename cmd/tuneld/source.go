@@ -72,7 +72,7 @@ func (t *tunnelEntrance) ServeConn(conn net.Conn) {
 	defer func() {
 		err := conn.Close()
 		if err != nil {
-			log.Printf("Failed to close connection with %v: %v\n", conn.RemoteAddr(), err)
+			log.Printf("Failed to close connection %v: %v\n", conn.LocalAddr(), err)
 		}
 	}()
 
@@ -109,7 +109,7 @@ func (t *tunnelEntrance) ServeConn(conn net.Conn) {
 		log.Printf("Src-side connection %v broke down: %v\n", connId, err)
 		return
 	}
-	log.Printf("Src-side connection %v ended. %v bytes was sent to Dst in total.", connId, sent)
+	log.Printf("Src-side connection ended %v. %v bytes was sent to Dst in total.", connId, sent)
 }
 
 func (t *tunnelEntrance) done() {
@@ -180,6 +180,6 @@ func (s *SrcServerService) CloseSrcConn(connId ConnId, nothing *struct{}) error 
 	}
 
 	delete(srcConnTable, connId)
-	log.Println("Forced close of Src-side connection", connId)
+	log.Println("Dst-side closed Src-side connection", connId)
 	return nil
 }

@@ -19,11 +19,11 @@ var (
 // serveDstConn starts once every DstServerService.Dial and forwards data received from Dst
 // to SrcServer.
 func serveDstConn(dst *dstConn) {
-	defer stopDstWorker(dst)
+	defer stopDstConn(dst)
 
 	rpcClient, err := getOrCreateServerConn(dst.SrcServer)
 	if err != nil {
-		log.Println("Failed to connect to source server %v: %v\n", dst.SrcServer, err)
+		log.Printf("Failed to connect to source server %v: %v\n", dst.SrcServer, err)
 		return
 	}
 
@@ -37,10 +37,10 @@ func serveDstConn(dst *dstConn) {
 		return
 	}
 
-	log.Printf("Dst-side connection %v ended. %v bytes was sent to Src in total.", dst.ConnId, sent)
+	log.Printf("Dst-side connection ended %v. %v bytes was sent to Src in total.", dst.ConnId, sent)
 }
 
-func stopDstWorker(dst *dstConn) {
+func stopDstConn(dst *dstConn) {
 	dstConnTableMu.Lock()
 	defer dstConnTableMu.Unlock()
 
@@ -118,7 +118,7 @@ func (s *DstServerService) Dial(tnnl tunnel.Tunnel, connId *ConnId) error {
 	connId.ConnNumber = dstConnNextId
 	dstConnNextId++
 
-	dst := &dstConn{Conn: conn, lastSeenMsgNumber: 0, Cond: sync.NewCond(new(sync.Mutex))}
+	dst := &dstConn{ConnId: *connId, Conn: conn, lastSeenMsgNumber: 0, Cond: sync.NewCond(new(sync.Mutex))}
 
 	dstConnTable[*connId] = dst
 	go serveDstConn(dst)
@@ -143,6 +143,6 @@ func (s *DstServerService) CloseDstConn(connId ConnId, nothing *struct{}) error 
 	}
 
 	delete(dstConnTable, connId)
-	log.Println("Forced close of Dst-side connection", connId)
+	log.Println("Src-side closed Dst-side connection", connId)
 	return nil
 }
