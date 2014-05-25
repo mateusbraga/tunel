@@ -86,6 +86,7 @@ func (s *DstServerService) Send(msg SendMsg, nop *struct{}) error {
 	dst.L.Lock()
 	defer dst.L.Unlock()
 	for msg.MsgNumber != dst.lastSeenMsgNumber+1 {
+		log.Printf("Got %v, last seen %v\n", msg.MsgNumber, dst.lastSeenMsgNumber)
 		dst.Wait()
 	}
 
