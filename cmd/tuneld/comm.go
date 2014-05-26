@@ -45,7 +45,9 @@ type tunnelConn struct {
 	ConnId
 	*rpc.Client
 	lastSentMsgNumber *uint64
+	lastAckMsgNumber  *uint64
 	resultChan        chan *rpc.Call
+	closing           bool
 	closeChan         chan struct{}
 	err               error
 	mutex             sync.Mutex
@@ -53,27 +55,37 @@ type tunnelConn struct {
 
 func NewTunnelConn(serviceMethod string, connId ConnId, rpcClient *rpc.Client) tunnelConn {
 	var lastNumber uint64
-	tnnlConn := tunnelConn{serviceMethod: serviceMethod, ConnId: connId, Client: rpcClient, lastSentMsgNumber: &lastNumber, resultChan: make(chan *rpc.Call, 16), closeChan: make(chan struct{})}
+	var lastAck uint64
+	tnnlConn := tunnelConn{serviceMethod: serviceMethod, ConnId: connId, Client: rpcClient, lastSentMsgNumber: &lastNumber, lastAckMsgNumber: &lastAck, resultChan: make(chan *rpc.Call, 16), closeChan: make(chan struct{})}
 
 	go tunnelConnWorker(tnnlConn)
 
 	return tnnlConn
 }
 
-func tunnelConnWorker(tnnlConn tunnelConn) {
+func tunnelConnWorker(t tunnelConn) {
 	for {
-		select {
-		case _ = <-tnnlConn.closeChan:
-			return
-		case call := <-tnnlConn.resultChan:
-			if call.Error != nil {
-				tnnlConn.mutex.Lock()
-				tnnlConn.err = call.Error
-				tnnlConn.mutex.Unlock()
+		call := <-t.resultChan
+		if call.Error != nil {
+			t.mutex.Lock()
+			t.err = call.Error
+			t.mutex.Unlock()
 
-				tnnlConn.Close()
-			}
+			close(t.closeChan)
+			return
 		}
+
+		t.mutex.Lock()
+		lastAckMsgNumber := call.Reply.(*uint64)
+		if *lastAckMsgNumber > *t.lastAckMsgNumber {
+			*t.lastAckMsgNumber = *lastAckMsgNumber
+		}
+		if t.closing && *t.lastSentMsgNumber == *t.lastAckMsgNumber {
+			t.mutex.Unlock()
+			close(t.closeChan)
+			return
+		}
+		t.mutex.Unlock()
 	}
 }
 
@@ -86,16 +98,16 @@ func (t tunnelConn) Write(data []byte) (int, error) {
 
 	*t.lastSentMsgNumber++
 	msg := SendMsg{ConnId: t.ConnId, Data: data, MsgNumber: *t.lastSentMsgNumber}
-	t.Client.Go(t.serviceMethod, msg, &struct{}{}, t.resultChan)
+	var lastAckMsgNumber uint64
+	t.Client.Go(t.serviceMethod, msg, &lastAckMsgNumber, t.resultChan)
 	return len(data), nil
 }
 
 func (t tunnelConn) Close() error {
-	select {
-	case _ = <-t.closeChan:
-		//already closed
-	default:
-		close(t.closeChan)
-	}
+	t.mutex.Lock()
+	t.closing = true
+	t.mutex.Unlock()
+
+	<-t.closeChan
 	return nil
 }

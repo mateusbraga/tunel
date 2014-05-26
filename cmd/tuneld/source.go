@@ -144,7 +144,7 @@ func (s *SrcServerService) SetUpSrcTunnel(tnnl tunnel.Tunnel, ack *struct{}) err
 }
 
 // Receive is called by DstServer to pass data to SrcServer
-func (s *SrcServerService) Receive(msg SendMsg, nop *struct{}) error {
+func (s *SrcServerService) Receive(msg SendMsg, lastMsgNumber *uint64) error {
 	srcConnTableMu.Lock()
 	defer srcConnTableMu.Unlock()
 
