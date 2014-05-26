@@ -66,7 +66,8 @@ type dstConn struct {
 	ConnId
 	net.Conn
 	lastSeenMsgNumber uint64
-	*sync.Cond
+	msgMap            map[uint64]*SendMsg
+	sync.Mutex
 }
 
 type DstServerService struct{}
@@ -85,24 +86,27 @@ func (s *DstServerService) Send(msg SendMsg, nop *struct{}) error {
 
 	log.Println("Got ", msg.MsgNumber, msg.ConnId)
 
-	dst.L.Lock()
-	defer dst.L.Unlock()
-	for msg.MsgNumber != dst.lastSeenMsgNumber+1 {
-		log.Printf("Got %v, last seen %v\n", msg.MsgNumber, dst.lastSeenMsgNumber)
-		dst.Wait()
+	dst.Lock()
+	defer dst.Unlock()
+
+	dst.msgMap[msg.MsgNumber] = &msg
+
+	m, exist := dst.msgMap[dst.lastSeenMsgNumber+1]
+	for exist {
+		sent, err := dst.Write(m.Data)
+		if err != nil {
+			return err
+		}
+		if sent != len(m.Data) {
+			return fmt.Errorf("Expected to send %d bytes, but sent only %d", len(m.Data), sent)
+		}
+		log.Printf("Sent %v bytes to %v (%v) MsgNumber %v\n", len(m.Data), m.Tunnel.Dst, m.ConnId, m.MsgNumber)
+
+		delete(dst.msgMap, dst.lastSeenMsgNumber+1)
+		dst.lastSeenMsgNumber++
+		m, exist = dst.msgMap[dst.lastSeenMsgNumber+1]
 	}
 
-	sent, err := dst.Write(msg.Data)
-	if err != nil {
-		return err
-	}
-	if sent != len(msg.Data) {
-		return fmt.Errorf("Expected to send %d bytes, but sent only %d", len(msg.Data), sent)
-	}
-
-	dst.lastSeenMsgNumber++
-	dst.Broadcast()
-	log.Printf("Sent %v bytes to %v (%v) MsgNumber %v\n", len(msg.Data), msg.Tunnel.Dst, msg.ConnId, msg.MsgNumber)
 	return nil
 }
 
@@ -121,7 +125,7 @@ func (s *DstServerService) Dial(tnnl tunnel.Tunnel, connId *ConnId) error {
 	connId.ConnNumber = dstConnNextId
 	dstConnNextId++
 
-	dst := &dstConn{ConnId: *connId, Conn: conn, lastSeenMsgNumber: 0, Cond: sync.NewCond(new(sync.Mutex))}
+	dst := &dstConn{ConnId: *connId, Conn: conn, msgMap: make(map[uint64]*SendMsg, 64)}
 
 	dstConnTable[*connId] = dst
 	go serveDstConn(dst)
