@@ -101,7 +101,7 @@ func (s *DstServerService) Send(msg SendMsg, nop *struct{}) error {
 
 	dst.lastSeenMsgNumber++
 	dst.Broadcast()
-	log.Printf("Sent %v bytes to %v (%v)\n", len(msg.Data), msg.Tunnel.Dst, msg.ConnId)
+	log.Printf("Sent %v bytes to %v (%v) MsgNumber %v\n", len(msg.Data), msg.Tunnel.Dst, msg.ConnId, msg.MsgNumber)
 	return nil
 }
 
