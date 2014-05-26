@@ -82,10 +82,12 @@ func (s *DstServerService) Send(msg SendMsg, nop *struct{}) error {
 		dstConnTableMu.Unlock()
 		return fmt.Errorf("Connection is not up")
 	}
-	dstConnTableMu.Unlock()
 
 	dst.L.Lock()
 	defer dst.L.Unlock()
+
+	dstConnTableMu.Unlock()
+
 	for msg.MsgNumber != dst.lastSeenMsgNumber+1 {
 		log.Printf("Got %v, last seen %v\n", msg.MsgNumber, dst.lastSeenMsgNumber)
 		dst.Wait()
