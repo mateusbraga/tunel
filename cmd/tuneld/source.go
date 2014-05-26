@@ -95,6 +95,10 @@ func (t *tunnelEntrance) ServeConn(conn net.Conn) {
 	srcConnTable[connId] = src
 	srcConnTableMu.Unlock()
 	defer func() {
+		srcConnTableMu.Lock()
+		delete(srcConnTable, connId)
+		srcConnTableMu.Unlock()
+
 		err = rpcClient.Call("DstServerService.CloseDstConn", connId, new(struct{}))
 		if err != nil {
 			log.Printf("Error while asking to close Dst connection %v: %v\n", connId, err)

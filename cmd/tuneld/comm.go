@@ -49,17 +49,20 @@ type tunnelConnSender struct {
 	*rpc.Client
 	lastSentMsgNumber *uint64
 	lastAckMsgNumber  *uint64
-	resultChan        chan *rpc.Call
-	closing           bool
-	closeChan         chan struct{}
-	err               error
-	mutex             sync.Mutex
+	closing           *bool
+	err               *error
+
+	resultChan chan *rpc.Call
+	closeChan  chan struct{}
+	mutex      *sync.Mutex
 }
 
 func NewTunnelConnSender(serviceMethod string, connId ConnId, rpcClient *rpc.Client) *tunnelConnSender {
 	var lastNumber uint64
 	var lastAck uint64
-	tnnlConn := tunnelConnSender{serviceMethod: serviceMethod, ConnId: connId, Client: rpcClient, lastSentMsgNumber: &lastNumber, lastAckMsgNumber: &lastAck, resultChan: make(chan *rpc.Call, 16), closeChan: make(chan struct{})}
+	var closing bool
+	var err error
+	tnnlConn := tunnelConnSender{serviceMethod: serviceMethod, ConnId: connId, Client: rpcClient, lastSentMsgNumber: &lastNumber, lastAckMsgNumber: &lastAck, resultChan: make(chan *rpc.Call, 128), closing: &closing, err: &err, closeChan: make(chan struct{}), mutex: new(sync.Mutex)}
 
 	go tunnelConnWorker(&tnnlConn)
 
@@ -71,8 +74,9 @@ func tunnelConnWorker(t *tunnelConnSender) {
 		select {
 		case call := <-t.resultChan:
 			if call.Error != nil {
+				log.Println("FOUND ERROR at tunnelConnWorker", call.Error)
 				t.mutex.Lock()
-				t.err = call.Error
+				*t.err = call.Error
 				t.mutex.Unlock()
 
 				close(t.closeChan)
@@ -81,11 +85,13 @@ func tunnelConnWorker(t *tunnelConnSender) {
 
 			t.mutex.Lock()
 			lastAckMsgNumber := call.Reply.(*uint64)
+			log.Println("new lastAckMsgNumber", *lastAckMsgNumber, "last sent", *t.lastSentMsgNumber, *t.closing)
 			if *lastAckMsgNumber > *t.lastAckMsgNumber {
 				*t.lastAckMsgNumber = *lastAckMsgNumber
 			}
-			if t.closing && *t.lastSentMsgNumber == *t.lastAckMsgNumber {
+			if *t.closing && *t.lastSentMsgNumber == *t.lastAckMsgNumber {
 				t.mutex.Unlock()
+				log.Println("closed on worker")
 				close(t.closeChan)
 				return
 			}
@@ -99,8 +105,8 @@ func tunnelConnWorker(t *tunnelConnSender) {
 func (t tunnelConnSender) Write(data []byte) (int, error) {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
-	if t.err != nil {
-		return 0, t.err
+	if *t.err != nil {
+		return 0, *t.err
 	}
 
 	*t.lastSentMsgNumber++
@@ -112,9 +118,11 @@ func (t tunnelConnSender) Write(data []byte) (int, error) {
 
 func (t tunnelConnSender) Close() error {
 	t.mutex.Lock()
-	t.closing = true
+	*t.closing = true
 
 	if *t.lastSentMsgNumber == *t.lastAckMsgNumber {
+		log.Println("closed on close")
+		log.Printf("Already sent everything last sent %v last ack %v\n", *t.lastSentMsgNumber, *t.lastAckMsgNumber)
 		close(t.closeChan)
 	}
 	t.mutex.Unlock()

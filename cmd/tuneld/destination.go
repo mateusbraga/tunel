@@ -80,6 +80,7 @@ func (s *DstServerService) Send(msg SendMsg, lastMsgNumber *uint64) error {
 
 	var err error
 	*lastMsgNumber, err = dst.fowardData(&msg)
+	log.Println("Returning", *lastMsgNumber, err)
 	return err
 }
 
