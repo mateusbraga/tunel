@@ -2,7 +2,10 @@ package main
 
 import (
 	"crypto/tls"
+	"fmt"
 	"github.com/mateusbraga/tunel/pkg/tunnel"
+	"log"
+	"net"
 	"net/rpc"
 	"sync"
 )
@@ -40,7 +43,7 @@ type ConnId struct {
 	ConnNumber int
 }
 
-type tunnelConn struct {
+type tunnelConnSender struct {
 	serviceMethod string
 	ConnId
 	*rpc.Client
@@ -53,43 +56,47 @@ type tunnelConn struct {
 	mutex             sync.Mutex
 }
 
-func NewTunnelConn(serviceMethod string, connId ConnId, rpcClient *rpc.Client) tunnelConn {
+func NewTunnelConnSender(serviceMethod string, connId ConnId, rpcClient *rpc.Client) *tunnelConnSender {
 	var lastNumber uint64
 	var lastAck uint64
-	tnnlConn := tunnelConn{serviceMethod: serviceMethod, ConnId: connId, Client: rpcClient, lastSentMsgNumber: &lastNumber, lastAckMsgNumber: &lastAck, resultChan: make(chan *rpc.Call, 16), closeChan: make(chan struct{})}
+	tnnlConn := tunnelConnSender{serviceMethod: serviceMethod, ConnId: connId, Client: rpcClient, lastSentMsgNumber: &lastNumber, lastAckMsgNumber: &lastAck, resultChan: make(chan *rpc.Call, 16), closeChan: make(chan struct{})}
 
-	go tunnelConnWorker(tnnlConn)
+	go tunnelConnWorker(&tnnlConn)
 
-	return tnnlConn
+	return &tnnlConn
 }
 
-func tunnelConnWorker(t tunnelConn) {
+func tunnelConnWorker(t *tunnelConnSender) {
 	for {
-		call := <-t.resultChan
-		if call.Error != nil {
+		select {
+		case call := <-t.resultChan:
+			if call.Error != nil {
+				t.mutex.Lock()
+				t.err = call.Error
+				t.mutex.Unlock()
+
+				close(t.closeChan)
+				return
+			}
+
 			t.mutex.Lock()
-			t.err = call.Error
+			lastAckMsgNumber := call.Reply.(*uint64)
+			if *lastAckMsgNumber > *t.lastAckMsgNumber {
+				*t.lastAckMsgNumber = *lastAckMsgNumber
+			}
+			if t.closing && *t.lastSentMsgNumber == *t.lastAckMsgNumber {
+				t.mutex.Unlock()
+				close(t.closeChan)
+				return
+			}
 			t.mutex.Unlock()
-
-			close(t.closeChan)
+		case <-t.closeChan:
 			return
 		}
-
-		t.mutex.Lock()
-		lastAckMsgNumber := call.Reply.(*uint64)
-		if *lastAckMsgNumber > *t.lastAckMsgNumber {
-			*t.lastAckMsgNumber = *lastAckMsgNumber
-		}
-		if t.closing && *t.lastSentMsgNumber == *t.lastAckMsgNumber {
-			t.mutex.Unlock()
-			close(t.closeChan)
-			return
-		}
-		t.mutex.Unlock()
 	}
 }
 
-func (t tunnelConn) Write(data []byte) (int, error) {
+func (t tunnelConnSender) Write(data []byte) (int, error) {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
 	if t.err != nil {
@@ -103,11 +110,47 @@ func (t tunnelConn) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
-func (t tunnelConn) Close() error {
+func (t tunnelConnSender) Close() error {
 	t.mutex.Lock()
 	t.closing = true
+
+	if *t.lastSentMsgNumber == *t.lastAckMsgNumber {
+		close(t.closeChan)
+	}
 	t.mutex.Unlock()
 
 	<-t.closeChan
 	return nil
+}
+
+type tunnelConnReceiver struct {
+	ConnId
+	net.Conn
+	lastSeenMsgNumber uint64
+	msgMap            map[uint64]*SendMsg
+	sync.Mutex
+}
+
+func (t *tunnelConnReceiver) fowardData(msg *SendMsg) (uint64, error) {
+	t.Lock()
+	defer t.Unlock()
+
+	t.msgMap[msg.MsgNumber] = msg
+
+	m, exist := t.msgMap[t.lastSeenMsgNumber+1]
+	for exist {
+		sent, err := t.Write(m.Data)
+		if err != nil {
+			return 0, err
+		}
+		if sent != len(m.Data) {
+			return 0, fmt.Errorf("Expected to send %d bytes, but sent only %d", len(m.Data), sent)
+		}
+		log.Printf("Sent %v bytes to %v (%v) MsgNumber %v\n", len(m.Data), m.Tunnel.Dst, m.ConnId, m.MsgNumber)
+
+		delete(t.msgMap, t.lastSeenMsgNumber+1)
+		t.lastSeenMsgNumber++
+		m, exist = t.msgMap[t.lastSeenMsgNumber+1]
+	}
+	return t.lastSeenMsgNumber, nil
 }

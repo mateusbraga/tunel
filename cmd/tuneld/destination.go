@@ -11,14 +11,14 @@ import (
 )
 
 var (
-	dstConnTable   = make(map[ConnId]*dstConn)
+	dstConnTable   = make(map[ConnId]*tunnelConnReceiver)
 	dstConnNextId  int
 	dstConnTableMu sync.Mutex
 )
 
 // serveDstConn starts once every DstServerService.Dial and forwards data received from Dst
 // to SrcServer.
-func serveDstConn(dst *dstConn) {
+func serveDstConn(dst *tunnelConnReceiver) {
 	defer stopDstConn(dst)
 
 	rpcClient, err := getOrCreateServerConn(dst.SrcServer)
@@ -27,20 +27,20 @@ func serveDstConn(dst *dstConn) {
 		return
 	}
 
-	tnnlConn := NewTunnelConn("SrcServerService.Receive", dst.ConnId, rpcClient)
-	defer tnnlConn.Close()
+	sender := NewTunnelConnSender("SrcServerService.Receive", dst.ConnId, rpcClient)
+	defer sender.Close()
 
 	// keep sending data back from Dst to SrcServer (which will then go to Src)
-	sent, err := io.Copy(tnnlConn, dst.Conn)
+	sent, err := io.Copy(sender, dst.Conn)
 	if err != nil {
 		log.Printf("Dst-side connection %v broke down: %v\n", dst.ConnId, err)
 		return
 	}
 
-	log.Printf("Dst-side connection ended %v. %v bytes was sent to Src in total.", dst.ConnId, sent)
+	log.Printf("Dst-side connection ended %v. %v bytes in total was sent to Src.", dst.ConnId, sent)
 }
 
-func stopDstConn(dst *dstConn) {
+func stopDstConn(dst *tunnelConnReceiver) {
 	dstConnTableMu.Lock()
 	defer dstConnTableMu.Unlock()
 
@@ -48,26 +48,18 @@ func stopDstConn(dst *dstConn) {
 
 	err := dst.Conn.Close()
 	if err != nil {
-		log.Printf("Error while closing Dst connection %v: %v\n", dst.ConnId, err)
+		//log.Printf("Error while closing Dst connection %v: %v\n", dst.ConnId, err)
 	}
 
 	rpcClient, err := getOrCreateServerConn(dst.SrcServer)
 	if err != nil {
-		log.Printf("Error while asking to close Src connection %v: %v\n", dst.ConnId, err)
+		log.Printf("Could not connect to SrcServer to ask to close Src connection %v: %v\n", dst.ConnId, err)
 		return
 	}
 	err = rpcClient.Call("SrcServerService.CloseSrcConn", dst.ConnId, new(struct{}))
 	if err != nil {
-		log.Printf("Error while asking to close Src connection %v: %v\n", dst.ConnId, err)
+		log.Printf("Could not ask to close Src connection %v: %v\n", dst.ConnId, err)
 	}
-}
-
-type dstConn struct {
-	ConnId
-	net.Conn
-	lastSeenMsgNumber uint64
-	msgMap            map[uint64]*SendMsg
-	sync.Mutex
 }
 
 type DstServerService struct{}
@@ -86,28 +78,9 @@ func (s *DstServerService) Send(msg SendMsg, lastMsgNumber *uint64) error {
 
 	log.Println("Got ", msg.MsgNumber, msg.ConnId)
 
-	dst.Lock()
-	defer dst.Unlock()
-
-	dst.msgMap[msg.MsgNumber] = &msg
-
-	m, exist := dst.msgMap[dst.lastSeenMsgNumber+1]
-	for exist {
-		sent, err := dst.Write(m.Data)
-		if err != nil {
-			return err
-		}
-		if sent != len(m.Data) {
-			return fmt.Errorf("Expected to send %d bytes, but sent only %d", len(m.Data), sent)
-		}
-		log.Printf("Sent %v bytes to %v (%v) MsgNumber %v\n", len(m.Data), m.Tunnel.Dst, m.ConnId, m.MsgNumber)
-
-		delete(dst.msgMap, dst.lastSeenMsgNumber+1)
-		dst.lastSeenMsgNumber++
-		m, exist = dst.msgMap[dst.lastSeenMsgNumber+1]
-	}
-	*lastMsgNumber = dst.lastSeenMsgNumber
-	return nil
+	var err error
+	*lastMsgNumber, err = dst.fowardData(&msg)
+	return err
 }
 
 // Dial open connection with Dst and starts a dstWorker.
@@ -125,7 +98,7 @@ func (s *DstServerService) Dial(tnnl tunnel.Tunnel, connId *ConnId) error {
 	connId.ConnNumber = dstConnNextId
 	dstConnNextId++
 
-	dst := &dstConn{ConnId: *connId, Conn: conn, msgMap: make(map[uint64]*SendMsg, 64)}
+	dst := &tunnelConnReceiver{ConnId: *connId, Conn: conn, msgMap: make(map[uint64]*SendMsg, 64)}
 
 	dstConnTable[*connId] = dst
 	go serveDstConn(dst)

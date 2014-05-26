@@ -14,7 +14,7 @@ var (
 	tunnelEntranceTable   = make(map[tunnel.Tunnel]*tunnelEntrance)
 	tunnelEntranceTableMu sync.Mutex
 
-	srcConnTable   = make(map[ConnId]net.Conn)
+	srcConnTable   = make(map[ConnId]*tunnelConnReceiver)
 	srcConnTableMu sync.Mutex
 )
 
@@ -72,7 +72,7 @@ func (t *tunnelEntrance) ServeConn(conn net.Conn) {
 	defer func() {
 		err := conn.Close()
 		if err != nil {
-			log.Printf("Failed to close connection %v: %v\n", conn.LocalAddr(), err)
+			//log.Printf("Failed to close connection %v: %v\n", conn.LocalAddr(), err)
 		}
 	}()
 
@@ -91,7 +91,8 @@ func (t *tunnelEntrance) ServeConn(conn net.Conn) {
 		return
 	}
 	srcConnTableMu.Lock()
-	srcConnTable[connId] = conn
+	src := &tunnelConnReceiver{ConnId: connId, Conn: conn, msgMap: make(map[uint64]*SendMsg, 64)}
+	srcConnTable[connId] = src
 	srcConnTableMu.Unlock()
 	defer func() {
 		err = rpcClient.Call("DstServerService.CloseDstConn", connId, new(struct{}))
@@ -100,11 +101,11 @@ func (t *tunnelEntrance) ServeConn(conn net.Conn) {
 		}
 	}()
 
-	tnnlConn := NewTunnelConn("DstServerService.Send", connId, rpcClient)
-	defer tnnlConn.Close()
+	sender := NewTunnelConnSender("DstServerService.Send", connId, rpcClient)
+	defer sender.Close()
 
 	// keep sending data from conn to DstServer (which will then go to Dst)
-	sent, err := io.Copy(tnnlConn, conn)
+	sent, err := io.Copy(sender, conn)
 	if err != nil {
 		log.Printf("Src-side connection %v broke down: %v\n", connId, err)
 		return
@@ -146,35 +147,29 @@ func (s *SrcServerService) SetUpSrcTunnel(tnnl tunnel.Tunnel, ack *struct{}) err
 // Receive is called by DstServer to pass data to SrcServer
 func (s *SrcServerService) Receive(msg SendMsg, lastMsgNumber *uint64) error {
 	srcConnTableMu.Lock()
-	defer srcConnTableMu.Unlock()
-
-	conn, ok := srcConnTable[msg.ConnId]
+	src, ok := srcConnTable[msg.ConnId]
 	if !ok {
+		srcConnTableMu.Unlock()
 		return fmt.Errorf("Connection is not up")
 	}
+	srcConnTableMu.Unlock()
 
-	sent, err := conn.Write(msg.Data)
-	if err != nil {
-		return err
-	}
-	if sent != len(msg.Data) {
-		return fmt.Errorf("Expected to send %d bytes, but sent only %d", len(msg.Data), sent)
-	}
-	log.Printf("Sent %v bytes back to %v (%v)\n", len(msg.Data), msg.Tunnel.Src, msg.ConnId)
-	return nil
+	var err error
+	*lastMsgNumber, err = src.fowardData(&msg)
+	return err
 }
 
 func (s *SrcServerService) CloseSrcConn(connId ConnId, nothing *struct{}) error {
 	srcConnTableMu.Lock()
 	defer srcConnTableMu.Unlock()
 
-	conn, ok := srcConnTable[connId]
+	src, ok := srcConnTable[connId]
 	if !ok {
 		// already closed
 		return nil
 	}
 
-	err := conn.Close()
+	err := src.Close()
 	if err != nil {
 		return err
 	}
