@@ -157,7 +157,7 @@ func (t *tunnelConnReceiver) fowardData(msg *SendMsg) (uint64, error) {
 		if sent != len(m.Data) {
 			return 0, fmt.Errorf("Expected to send %d bytes, but sent only %d", len(m.Data), sent)
 		}
-		log.Printf("Sent %v bytes to %v (%v) MsgNumber %v\n", len(m.Data), t.receiver, m.ConnId, m.MsgNumber)
+		//log.Printf("Sent %v bytes to %v (%v) MsgNumber %v\n", len(m.Data), t.receiver, m.ConnId, m.MsgNumber)
 
 		delete(t.msgMap, t.lastSeenMsgNumber+1)
 		t.lastSeenMsgNumber++
