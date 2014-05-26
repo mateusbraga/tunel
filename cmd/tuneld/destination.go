@@ -75,19 +75,18 @@ func init() { rpc.Register(new(DstServerService)) }
 
 // Send is called by SrcServer to pass data to DstServer
 func (s *DstServerService) Send(msg SendMsg, nop *struct{}) error {
-	log.Println("Got ", msg.MsgNumber)
+	log.Println("Got ", msg.MsgNumber, msg.ConnId)
+
 	dstConnTableMu.Lock()
 	dst, ok := dstConnTable[msg.ConnId]
 	if !ok {
 		dstConnTableMu.Unlock()
 		return fmt.Errorf("Connection is not up")
 	}
+	dstConnTableMu.Unlock()
 
 	dst.L.Lock()
 	defer dst.L.Unlock()
-
-	dstConnTableMu.Unlock()
-
 	for msg.MsgNumber != dst.lastSeenMsgNumber+1 {
 		log.Printf("Got %v, last seen %v\n", msg.MsgNumber, dst.lastSeenMsgNumber)
 		dst.Wait()
