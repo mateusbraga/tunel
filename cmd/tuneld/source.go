@@ -91,7 +91,7 @@ func (t *tunnelEntrance) ServeConn(conn net.Conn) {
 		return
 	}
 	srcConnTableMu.Lock()
-	src := &tunnelConnReceiver{ConnId: connId, Conn: conn, msgMap: make(map[uint64]*SendMsg, 64)}
+	src := &tunnelConnReceiver{receiver: t.Src, ConnId: connId, Conn: conn, msgMap: make(map[uint64]*SendMsg, 64)}
 	srcConnTable[connId] = src
 	srcConnTableMu.Unlock()
 	defer func() {

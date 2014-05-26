@@ -76,11 +76,10 @@ func (s *DstServerService) Send(msg SendMsg, lastMsgNumber *uint64) error {
 	}
 	dstConnTableMu.Unlock()
 
-	log.Println("Got ", msg.MsgNumber, msg.ConnId)
+	//log.Println("Got ", msg.MsgNumber, msg.ConnId)
 
 	var err error
 	*lastMsgNumber, err = dst.fowardData(&msg)
-	log.Println("Returning", *lastMsgNumber, err)
 	return err
 }
 
@@ -99,7 +98,7 @@ func (s *DstServerService) Dial(tnnl tunnel.Tunnel, connId *ConnId) error {
 	connId.ConnNumber = dstConnNextId
 	dstConnNextId++
 
-	dst := &tunnelConnReceiver{ConnId: *connId, Conn: conn, msgMap: make(map[uint64]*SendMsg, 64)}
+	dst := &tunnelConnReceiver{receiver: tnnl.Dst, ConnId: *connId, Conn: conn, msgMap: make(map[uint64]*SendMsg, 64)}
 
 	dstConnTable[*connId] = dst
 	go serveDstConn(dst)

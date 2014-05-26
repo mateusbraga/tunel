@@ -74,7 +74,7 @@ func tunnelConnWorker(t *tunnelConnSender) {
 		select {
 		case call := <-t.resultChan:
 			if call.Error != nil {
-				log.Println("FOUND ERROR at tunnelConnWorker", call.Error)
+				//log.Println("FOUND ERROR at tunnelConnWorker", call.Error)
 				t.mutex.Lock()
 				*t.err = call.Error
 				t.mutex.Unlock()
@@ -85,13 +85,13 @@ func tunnelConnWorker(t *tunnelConnSender) {
 
 			t.mutex.Lock()
 			lastAckMsgNumber := call.Reply.(*uint64)
-			log.Println("new lastAckMsgNumber", *lastAckMsgNumber, "last sent", *t.lastSentMsgNumber, *t.closing)
+			//log.Println("new lastAckMsgNumber", *lastAckMsgNumber, "last sent", *t.lastSentMsgNumber, *t.closing)
 			if *lastAckMsgNumber > *t.lastAckMsgNumber {
 				*t.lastAckMsgNumber = *lastAckMsgNumber
 			}
 			if *t.closing && *t.lastSentMsgNumber == *t.lastAckMsgNumber {
 				t.mutex.Unlock()
-				log.Println("closed on worker")
+				//log.Println("closed on worker")
 				close(t.closeChan)
 				return
 			}
@@ -121,19 +121,20 @@ func (t tunnelConnSender) Close() error {
 	*t.closing = true
 
 	if *t.lastSentMsgNumber == *t.lastAckMsgNumber {
-		log.Println("closed on close")
-		log.Printf("Already sent everything last sent %v last ack %v\n", *t.lastSentMsgNumber, *t.lastAckMsgNumber)
+		//log.Println("closed on close")
+		//log.Printf("Already sent everything last sent %v last ack %v\n", *t.lastSentMsgNumber, *t.lastAckMsgNumber)
 		close(t.closeChan)
 	}
 	t.mutex.Unlock()
 
-	log.Println("Closing", t.ConnId)
+	//log.Println("Closing", t.ConnId)
 	<-t.closeChan
-	log.Println("Closed", t.ConnId)
+	//log.Println("Closed", t.ConnId)
 	return nil
 }
 
 type tunnelConnReceiver struct {
+	receiver string
 	ConnId
 	net.Conn
 	lastSeenMsgNumber uint64
@@ -156,7 +157,7 @@ func (t *tunnelConnReceiver) fowardData(msg *SendMsg) (uint64, error) {
 		if sent != len(m.Data) {
 			return 0, fmt.Errorf("Expected to send %d bytes, but sent only %d", len(m.Data), sent)
 		}
-		log.Printf("Sent %v bytes to %v (%v) MsgNumber %v\n", len(m.Data), m.Tunnel.Dst, m.ConnId, m.MsgNumber)
+		log.Printf("Sent %v bytes to %v (%v) MsgNumber %v\n", len(m.Data), t.receiver, m.ConnId, m.MsgNumber)
 
 		delete(t.msgMap, t.lastSeenMsgNumber+1)
 		t.lastSeenMsgNumber++
