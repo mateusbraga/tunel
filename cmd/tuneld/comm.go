@@ -119,6 +119,7 @@ func (t tunnelConnSender) Close() error {
 	}
 	t.mutex.Unlock()
 
+	log.Println("Closing", t.ConnId)
 	<-t.closeChan
 	return nil
 }
