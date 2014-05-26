@@ -4,7 +4,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"github.com/mateusbraga/tunel/pkg/tunnel"
-	"log"
+	//"log"
 	"net"
 	"net/rpc"
 	"sync"
