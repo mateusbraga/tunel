@@ -121,6 +121,7 @@ func (t tunnelConnSender) Close() error {
 
 	log.Println("Closing", t.ConnId)
 	<-t.closeChan
+	log.Println("Closed", t.ConnId)
 	return nil
 }
 
