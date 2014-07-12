@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/rpc"
+	_ "runtime/debug"
 )
 
 var (
@@ -59,5 +60,6 @@ func init() {
 		log.Panicln("Failed to init root certificate")
 	}
 	tlsConfig.RootCAs = certPool
-	tlsConfig.InsecureSkipVerify = true
+	tlsConfig.ServerName = "server"
+	//tlsConfig.InsecureSkipVerify = true
 }

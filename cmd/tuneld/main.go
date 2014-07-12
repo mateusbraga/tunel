@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/rpc"
+	_ "runtime/debug"
 )
 
 var (
@@ -33,7 +34,7 @@ func main() {
 	//log.Println(err)
 	//}
 
-	//b := make([]byte, 100)
+	//b := make([]byte, 10000)
 	//_, err = c.Read(b)
 	//if err != nil {
 	//log.Println(err)
@@ -62,10 +63,11 @@ func init() {
 		log.Panicln("Failed to init root certificate")
 	}
 	serverTlsConfig.ClientCAs = certPool
+	serverTlsConfig.ServerName = "server"
 
 	//TODO uncomment this for real security
 	//serverTlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-	serverTlsConfig.InsecureSkipVerify = true
+	//serverTlsConfig.InsecureSkipVerify = true
 }
 
 // clientTlsConfig initialization
@@ -88,6 +90,7 @@ func init() {
 		log.Panicln("Failed to init root certificate")
 	}
 	clientTlsConfig.RootCAs = certPool
+	clientTlsConfig.ServerName = "server"
 
-	clientTlsConfig.InsecureSkipVerify = true
+	//clientTlsConfig.InsecureSkipVerify = true
 }
