@@ -1,5 +1,7 @@
 # tunel
 
+Tunel implements a TLS tunneling program. It was developed as part of my studies in TLS and PKI.
+
 # Development
 
 tunel is written in [Go](http://golang.org). You'll need a recent version of Go installed on your computer to build it.
